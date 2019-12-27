@@ -1,0 +1,71 @@
+---
+
+server:
+  # 9080 ポートで HTTP でリッスンする
+  # ブラウザで開くとログのディスカバリの状態が見れます
+  http_listen_port: 9080
+
+  # grpc のリッスンポート、0 ならランダムに決定される・・・これなにに使っているの？
+  grpc_listen_port: 0
+
+clients:
+  # Loki の URL を指定
+  - url: http://localhost:3100/loki/api/v1/push
+
+# ログのディスカバリの設定
+scrape_configs:
+
+  # Apache のアクセスログを収集
+  - job_name: access_log
+    static_configs:
+      - targets:
+          # targets は localhost または自ホスト名のどちらかを指定する必要がある
+          # とドキュメントに書いてた気がするけど何でも通る？ というかこれ指定できる意味あるの？
+          - localhost
+        labels:
+          # __path__ ラベルでファイル名を指定する、ワイルドカードも指定可能
+          __path__: /var/log/httpd/access_log
+    pipeline_stages:
+      - regex:
+          # 正規表現で名前付きキャプチャ
+          expression: |-
+            ^(?P<addr>\S+)\s+\S+\s+\S+\s+\[(?P<time>.*?)\]\s+"(?P<method>\S+)\s+(?P<path>\S+)\s+\S+"\s+(?P<status>\S+)\s+
+      - labels:
+          # ↑でキャプチャした名前・値でラベルを付与
+          addr:
+          method:
+          path:
+          status:
+      - timestamp:
+          # ↑でキャプチャした値でログのタイムスタンプを上書き、デフォはログが収集された時間です
+          source: time
+          # golang での日時のフォーマット指定
+          format: '02/Jan/2006:15:04:05 -0700'
+      - metrics:
+          # log_lines_total というメトリクス名で公開
+          log_lines_total:
+            # カウンターとして公開、他にも Gauge や Histogram が指定可能
+            type: Counter
+            description: total number of log lines
+            # パイプラインで time というフィールドがある時だけ処理する
+            source: time
+            config:
+              # メトリクス値をインクリメントする
+              # Counter なら inc 以外に add も指定できる（source の値で加算される）
+              action: inc
+
+  # systemd の journal からログを収集
+  - job_name: systemd
+    journal:
+      # Promtail の起動時にどこまで過去のログを読むかを指定
+      max_age: '1h'
+      # journal ログのディレクトリ
+      path: /run/log/journal
+    relabel_configs:
+      # session-12345.scope のようなユニットは除外
+      - source_labels: [__journal__systemd_unit]
+        regex: ^session-\d+.scope$
+        action: drop
+      # ユニット名でラベルを付ける
+      - source_labels: [__journal__systemd_unit]
+        target_label: systemd
